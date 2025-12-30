@@ -51,19 +51,28 @@ void Initialize(void) {
 }
 
 void InitCrosshair() {
-    // Două linii: una orizontală și una verticală care se intersectează la (0,0)
-    float crosshairVertices[] = {
-        // Poziții (x, y, z)
-        -0.03f,  0.0f, 0.0f,   0.03f, 0.0f, 0.0f, // Linia orizontală
-         0.0f, -0.04f, 0.0f,   0.0f,  0.04f, 0.0f  // Linia verticală
-    };
+    // Generate a circle with a specific radius and number of segments
+    const int numSegments = 32; // More segments = smoother circle
+    const float radius = 0.02f; // Circle radius
+    
+    std::vector<float> crosshairVertices;
+    
+    for (int i = 0; i <= numSegments; i++) {
+        float angle = 2.0f * 3.14159265f * i / numSegments;
+        float x = radius * cos(angle);
+        float y = radius * sin(angle);
+        
+        crosshairVertices.push_back(x);
+        crosshairVertices.push_back(y);
+        crosshairVertices.push_back(0.0f);
+    }
 
     glGenVertexArrays(1, &crosshairVAO);
     glGenBuffers(1, &crosshairVBO);
 
     glBindVertexArray(crosshairVAO);
     glBindBuffer(GL_ARRAY_BUFFER, crosshairVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(crosshairVertices), crosshairVertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, crosshairVertices.size() * sizeof(float), crosshairVertices.data(), GL_STATIC_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
@@ -89,7 +98,7 @@ void RenderCrosshair() {
 
     glBindVertexArray(crosshairVAO);
     glLineWidth(2.0f); // Facem liniile puțin mai groase
-    glDrawArrays(GL_LINES, 0, 4);
+    glDrawArrays(GL_LINE_LOOP, 0, 33); // 32 segments + 1 to close the circle
 
     // Reactivăm adâncimea pentru restul scenei în cadrul următor
     glEnable(GL_DEPTH_TEST);
@@ -112,7 +121,11 @@ void RenderFunction(void) {
 
     // 3. MATRICE VIZUALIZARE SI PROIECTIE
     // Matricea de perspectiva cu un zFar mare pentru a vedea orizontul
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 1000.0f);
+    float width = (float)glutGet(GLUT_WINDOW_WIDTH);
+    float height = (float)glutGet(GLUT_WINDOW_HEIGHT);
+
+    // Folosim aspect ratio-ul real pentru proiecție
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), width / height, 0.1f, 1000.0f);
     glm::mat4 view = camera.GetViewMatrix();
 
     glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projection[0][0]);
@@ -153,14 +166,18 @@ void KeyboardDown(unsigned char key, int x, int y) {
 }
 
 void mouse_callback(int x, int y) {
-    // Transmite coordonatele mousepad-ului catre clasa Camera
+    // Obținem centrul actual al ferestrei
+    int centerX = glutGet(GLUT_WINDOW_WIDTH) / 2;
+    int centerY = glutGet(GLUT_WINDOW_HEIGHT) / 2;
+
     camera.HandleMouseMovement(x, y);
 
-    // Recentrare cursor (Warp) pentru control de tip FPS
-    if (x < 100 || x > 700 || y < 100 || y > 500) {
-        glutWarpPointer(400, 300);
-        camera.lastX = 400;
-        camera.lastY = 300;
+    // Forțăm recentrarea exact pe centrul dinamic
+    if (x < 100 || x > glutGet(GLUT_WINDOW_WIDTH) - 100 ||
+        y < 100 || y > glutGet(GLUT_WINDOW_HEIGHT) - 100) {
+        glutWarpPointer(centerX, centerY);
+        camera.lastX = (float)centerX;
+        camera.lastY = (float)centerY;
     }
 }
 
@@ -176,9 +193,6 @@ void MouseClick(int button, int state, int x, int y) {
         }
     }
 }
-
-
-// In main() adauga:
 
 
 void Cleanup(void) {

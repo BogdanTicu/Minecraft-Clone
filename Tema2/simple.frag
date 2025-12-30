@@ -18,7 +18,7 @@ void main() {
     // Calcul ceață (Fog)
     float dist = length(FragPos); 
     float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
-    
-    vec3 finalColor = mix(fogColor, lighting, fogFactor); //
+    vec3 finalColor = lighting;
+    //vec3 finalColor = mix(fogColor, lighting, fogFactor); //
     FragColor = vec4(finalColor, 1.0);
 }
