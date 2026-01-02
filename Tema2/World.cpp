@@ -8,7 +8,7 @@ World::World(int size) : MapSize(size) {
 	noiseGenerator.SetNoiseType(FastNoiseLite::NoiseType::NoiseType_OpenSimplex2);
     noiseGenerator.SetSeed(1234);
     noiseGenerator.SetFractalType(FastNoiseLite::FractalType_FBm);
-    noiseGenerator.SetFractalOctaves(6);      // Mai multe octave = mai multe detalii fine
+    noiseGenerator.SetFractalOctaves(4);      // Mai multe octave = mai multe detalii fine
     noiseGenerator.SetFractalLacunarity(2.0f);
     noiseGenerator.SetFractalGain(0.5f);      // Determină cât de "ascuțite" sunt detaliile
 
@@ -17,56 +17,162 @@ World::World(int size) : MapSize(size) {
 // Dimensiunea standard a unui chunk în Minecraft
 const int CHUNK_SIZE = 16;
 
+void World::UpdateNeighborChunks(ChunkPos pos, int lx, int ly, int lz) {
+    // Dacă blocul e pe marginea stângă, reconstruim chunk-ul din stânga
+    if (lx == 0) BuildChunkMesh({ pos.x - 1, pos.z });
+    if (lx == 15) BuildChunkMesh({ pos.x + 1, pos.z });
+    if (lz == 0) BuildChunkMesh({ pos.x, pos.z - 1 });
+    if (lz == 15) BuildChunkMesh({ pos.x, pos.z + 1 });
+}
+void World::AddFaceToMesh(std::vector<WorldVertex>& vertices, glm::vec3 p, glm::vec3 normal, int blockType, int faceDirection) {
+    // Coordonate UV preluate din Cube.cpp
+    float uMin = 0.0f, uMax = 0.5f, vMin = 0.5f, vMax = 1.0f; // Implicit: Pamant (Side)
+
+    if (blockType == 1) { // IARBA
+        if (faceDirection == 0) { // SUS
+            uMin = 0.5f; uMax = 1.0f; vMin = 0.5f; vMax = 1.0f;
+        }
+        else if (faceDirection == 1) { // JOS
+            uMin = 0.0f; uMax = 0.5f; vMin = 0.0f; vMax = 0.5f;
+        }
+    }
+    else if (blockType == 2) { // PIATRA (Daca ai atlas, ajustezi aici)
+        uMin = 0.5f; uMax = 1.0f; vMin = 0.0f; vMax = 0.5f;
+    }
+
+    // Offset-uri pentru colțurile feței (0.5f ca în Cube.cpp)
+    float s = 0.5f;
+    glm::vec3 v1, v2, v3, v4;
+
+    // Determinăm poziția celor 4 colțuri în funcție de orientare
+    if (faceDirection == 0) { // SUS (Y+)
+        v1 = { p.x - s, p.y + s, p.z - s }; v2 = { p.x + s, p.y + s, p.z - s };
+        v3 = { p.x + s, p.y + s, p.z + s }; v4 = { p.x - s, p.y + s, p.z + s };
+    }
+    else if (faceDirection == 1) { // JOS (Y-)
+        v1 = { p.x - s, p.y - s, p.z - s }; v2 = { p.x + s, p.y - s, p.z - s };
+        v3 = { p.x + s, p.y - s, p.z + s }; v4 = { p.x - s, p.y - s, p.z + s };
+    }
+    else if (faceDirection == 2) { // SPATE (Z-)
+        v1 = { p.x - s, p.y - s, p.z - s }; v2 = { p.x + s, p.y - s, p.z - s };
+        v3 = { p.x + s, p.y + s, p.z - s }; v4 = { p.x - s, p.y + s, p.z - s };
+    }
+    else if (faceDirection == 3) { // FATA (Z+)
+        v1 = { p.x - s, p.y - s, p.z + s }; v2 = { p.x + s, p.y - s, p.z + s };
+        v3 = { p.x + s, p.y + s, p.z + s }; v4 = { p.x - s, p.y + s, p.z + s };
+    }
+    else if (faceDirection == 4) { // STANGA (X-)
+        v1 = { p.x - s, p.y - s, p.z + s }; v2 = { p.x - s, p.y + s, p.z + s };
+        v3 = { p.x - s, p.y + s, p.z - s }; v4 = { p.x - s, p.y - s, p.z - s };
+    }
+    else { // DREAPTA (X+)
+        v1 = { p.x + s, p.y - s, p.z + s }; v2 = { p.x + s, p.y + s, p.z + s };
+        v3 = { p.x + s, p.y + s, p.z - s }; v4 = { p.x + s, p.y - s, p.z - s };
+    }
+
+    // Adăugăm cele două triunghiuri (6 vertecși)
+    vertices.push_back({ v1, normal, {uMin, vMin} });
+    vertices.push_back({ v2, normal, {uMax, vMin} });
+    vertices.push_back({ v3, normal, {uMax, vMax} });
+    vertices.push_back({ v3, normal, {uMax, vMax} });
+    vertices.push_back({ v4, normal, {uMin, vMax} });
+    vertices.push_back({ v1, normal, {uMin, vMin} });
+}
+
+void World::BuildChunkMesh(ChunkPos pos) {
+    ChunkData& data = activeChunks[pos];
+    std::vector<WorldVertex> grassVerts;
+    std::vector<WorldVertex> stoneVerts;
+
+    for (int x = 0; x < 16; x++) {
+        for (int y = 0; y < 128; y++) {
+            for (int z = 0; z < 16; z++) {
+                int type = data.blocks[x][y][z];
+                if (type == 0) continue;
+
+                glm::vec3 p(pos.x * 16 + x, y, pos.z * 16 + z);
+                // Alegem lista în care punem vertecșii
+                std::vector<WorldVertex>& currentList = (type == 1) ? grassVerts : stoneVerts;
+
+                // Verificăm fețele (Face Culling)
+                if (y == 127 || data.blocks[x][y + 1][z] == 0) AddFaceToMesh(currentList, p, { 0, 1, 0 }, type, 0);
+                if (y == 0 || data.blocks[x][y - 1][z] == 0)   AddFaceToMesh(currentList, p, { 0, -1, 0 }, type, 1);
+                if (z == 0 || data.blocks[x][y][z - 1] == 0)   AddFaceToMesh(currentList, p, { 0, 0, -1 }, type, 2);
+                if (z == 15 || data.blocks[x][y][z + 1] == 0)  AddFaceToMesh(currentList, p, { 0, 0, 1 }, type, 3);
+                if (x == 0 || data.blocks[x - 1][y][z] == 0)   AddFaceToMesh(currentList, p, { -1, 0, 0 }, type, 4);
+                if (x == 15 || data.blocks[x + 1][y][z] == 0)  AddFaceToMesh(currentList, p, { 1, 0, 0 }, type, 5);
+            }
+        }
+    }
+
+    // Funcție utilitară pentru a încărca un vector într-un VAO/VBO
+    auto upload = [](GLuint& vao, GLuint& vbo, int& count, std::vector<WorldVertex>& verts) {
+        if (verts.empty()) { count = 0; return; }
+        if (vao == 0) { glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo); }
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(WorldVertex), verts.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(WorldVertex), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(WorldVertex), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(6, 2, GL_FLOAT, GL_FALSE, sizeof(WorldVertex), (void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(6);
+        count = (int)verts.size();
+        };
+
+    upload(data.grassVAO, data.grassVBO, data.grassVertexCount, grassVerts);
+    upload(data.stoneVAO, data.stoneVBO, data.stoneVertexCount, stoneVerts);
+}
 void World::GenerateChunk(ChunkPos pos) {
-	//daca exista chunk salvat, il incarcam
     if (savedChunks.count(pos)) {
         activeChunks[pos] = savedChunks[pos];
         return;
     }
+
     ChunkData newChunk;
+    memset(newChunk.blocks, 0, sizeof(newChunk.blocks)); // Umplem cu AIR
+
     for (int x = 0; x < 16; x++) {
         for (int z = 0; z < 16; z++) {
             int globalX = pos.x * 16 + x;
             int globalZ = pos.z * 16 + z;
             float surfaceY = getNoiseHeight(globalX, globalZ);
 
-            // Blocul de la suprafață (Iarbă)
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, surfaceY, (float)globalZ));
-            newChunk.grassMatrices.push_back(model);
-
-            // În interiorul World::GenerateChunk
-            for (int y = (int)surfaceY - 1; y >= 0; y--) {
-                glm::mat4 stoneModel = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, (float)y, (float)globalZ));
-                newChunk.stoneMatrices.push_back(stoneModel);
+            for (int y = 0; y < 128; y++) {
+                if (y == (int)surfaceY)
+                    newChunk.blocks[x][y][z] = 1; // GRASS
+                else if (y < surfaceY && y > surfaceY - 7)
+                    newChunk.blocks[x][y][z] = 2; // STONE
             }
         }
     }
     activeChunks[pos] = newChunk;
+    BuildChunkMesh(pos); // Generăm geometria imediat
 }
 
 void World::Render(GLuint programId, Cube* cubeModel) {
     GLint colorLoc = glGetUniformLocation(programId, "blockColor");
+    glm::mat4 identity = glm::mat4(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(programId, "model"), 1, GL_FALSE, &identity[0][0]);
+    glUseProgram(programId);
 
-    for (auto const& [pos, data] : activeChunks) {
-        // 1. Randăm iarba (Verde)
-        glUniform3f(colorLoc, 0.2f, 0.8f, 0.2f);
-        cubeModel->DrawInstanced(programId, data.grassMatrices);
-
-        // 2. Randăm piatra (Gri)
-        glUniform3f(colorLoc, 0.5f, 0.5f, 0.5f);
-        cubeModel->DrawInstanced(programId, data.stoneMatrices);
+    for (auto& [pos, data] : activeChunks) {
+        // Randăm iarba
+        if (data.grassVertexCount > 0) {
+            glUniform3f(colorLoc, 0.2f, 0.8f, 0.2f);
+            glBindVertexArray(data.grassVAO);
+            glDrawArrays(GL_TRIANGLES, 0, data.grassVertexCount);
+        }
+        // Randăm piatra
+        if (data.stoneVertexCount > 0) {
+            glUniform3f(colorLoc, 0.5f, 0.5f, 0.5f);
+            glBindVertexArray(data.stoneVAO);
+            glDrawArrays(GL_TRIANGLES, 0, data.stoneVertexCount);
+        }
     }
 }
-// Funcție helper pentru a genera un număr pseudo-aleatoriu bazat pe coordonate
-float hash(float n) {
-    return glm::fract(sin(n) * 43758.5453123f);
-}
 
-// O funcție de zgomot 2D simplificată (Noise)
-float noise(float x, float z) {
-    float n = x + z * 57.0f;
-    return hash(n);
-}
 
 float World::getNoiseHeight(int x, int z) {
     // 1. Selectorul - frecvență foarte mică (0.005) pentru a crea zone mari de biomi
@@ -150,44 +256,40 @@ void World::Update(glm::vec3 cameraPos) {
 
 void World::BreakBlock(glm::vec3 cameraPos, glm::vec3 cameraFront) {
     float reach = 5.0f;
-    float step = 0.1f; // Larger step for better performance
+    float step = 0.1f;
 
     for (float t = 0.0f; t < reach; t += step) {
         glm::vec3 rayPoint = cameraPos + (t * cameraFront);
 
-        // Determinăm coordonatele întregi ale punctului de pe rază
         int ix = (int)std::floor(rayPoint.x);
         int iy = (int)std::floor(rayPoint.y);
         int iz = (int)std::floor(rayPoint.z);
 
-        // Handle negative chunk coordinates properly
+        // Calculăm chunk-ul și coordonatele locale
         int chunkX = ix >= 0 ? ix / 16 : (ix - 15) / 16;
         int chunkZ = iz >= 0 ? iz / 16 : (iz - 15) / 16;
         ChunkPos cPos = { chunkX, chunkZ };
 
         if (activeChunks.count(cPos)) {
-            // VERIFICARE IARBĂ
-            auto& grass = activeChunks[cPos].grassMatrices;
-            for (auto it = grass.begin(); it != grass.end(); ++it) {
-                glm::vec3 bPos = glm::vec3((*it)[3]);
-                if ((int)std::floor(bPos.x) == ix && (int)std::floor(bPos.y) == iy && (int)std::floor(bPos.z) == iz) {
-                    grass.erase(it);
-                    return;
-                }
-            }
-            // VERIFICARE PIATRĂ
-            auto& stone = activeChunks[cPos].stoneMatrices;
-            for (auto it = stone.begin(); it != stone.end(); ++it) {
-                glm::vec3 bPos = glm::vec3((*it)[3]);
-                if ((int)std::floor(bPos.x) == ix && (int)std::floor(bPos.y) == iy && (int)std::floor(bPos.z) == iz) {
-                    stone.erase(it);
-                    return;
-                }
+            int lx = ix - (chunkX * 16);
+            int lz = iz - (chunkZ * 16);
+
+            // Verificăm dacă am lovit un bloc care nu e AER
+            if (iy >= 0 && iy < 128 && activeChunks[cPos].blocks[lx][iy][lz] != 0) {
+                // 1. Modificăm datele
+                activeChunks[cPos].blocks[lx][iy][lz] = 0; // Setăm pe AIR
+
+                // 2. Re-generăm mesh-ul vizual pentru acest chunk
+                BuildChunkMesh(cPos);
+
+                // 3. Verificăm dacă trebuie să actualizăm și vecinii (dacă blocul e pe margine)
+                UpdateNeighborChunks(cPos, lx, iy, lz);
+
+                return; // Am spart blocul, ieșim
             }
         }
     }
 }
-
 void World::PlaceBlock(glm::vec3 cameraPos, glm::vec3 cameraFront) {
     float reach = 5.0f;
     float step = 0.1f;
@@ -199,58 +301,45 @@ void World::PlaceBlock(glm::vec3 cameraPos, glm::vec3 cameraFront) {
         int iy = (int)std::floor(rayPoint.y);
         int iz = (int)std::floor(rayPoint.z);
 
+        // Dacă am găsit un bloc solid, punem noul bloc în poziția anterioară (AER)
         if (IsBlockAt(ix, iy, iz)) {
-            // Mergem înapoi pe rază exact un pas pentru a găsi aerul
             glm::vec3 placePoint = cameraPos + (t - step) * cameraFront;
 
             int px = (int)std::floor(placePoint.x);
             int py = (int)std::floor(placePoint.y);
             int pz = (int)std::floor(placePoint.z);
 
-            // Verificăm să nu punem blocul peste noi înșine
-            int playerX = (int)std::floor(cameraPos.x);
-            int playerY = (int)std::floor(cameraPos.y);
-            int playerZ = (int)std::floor(cameraPos.z);
-            
-            if ((px == playerX && py == playerY && pz == playerZ) ||
-                (px == playerX && py == playerY - 1 && pz == playerZ)) {
-                return;
-            }
+            // Verificăm să nu punem blocul peste noi
+            if (py == (int)std::floor(cameraPos.y) && px == (int)std::floor(cameraPos.x) && pz == (int)std::floor(cameraPos.z)) return;
 
-            // Handle negative chunk coordinates properly
             int chunkX = px >= 0 ? px / 16 : (px - 15) / 16;
             int chunkZ = pz >= 0 ? pz / 16 : (pz - 15) / 16;
             ChunkPos cPos = { chunkX, chunkZ };
 
             if (activeChunks.count(cPos)) {
-                glm::mat4 newModel = glm::translate(glm::mat4(1.0f), glm::vec3(px, py, pz));
-                activeChunks[cPos].grassMatrices.push_back(newModel);
+                int lx = px - (chunkX * 16);
+                int lz = pz - (chunkZ * 16);
+
+                activeChunks[cPos].blocks[lx][py][lz] = 1; // Punem IARBĂ (1)
+                BuildChunkMesh(cPos);
+                UpdateNeighborChunks(cPos, lx, py, lz);
+                return;
             }
-            return;
         }
     }
 }
 
-// 2. Modifică IsBlockAt să compare INTREGII, nu distanța FLOAT
+
 bool World::IsBlockAt(int x, int y, int z) {
-    // Handle negative chunk coordinates properly
     int chunkX = x >= 0 ? x / 16 : (x - 15) / 16;
     int chunkZ = z >= 0 ? z / 16 : (z - 15) / 16;
-    
     ChunkPos cPos = { chunkX, chunkZ };
-    
+
     if (activeChunks.count(cPos)) {
-        // Verificăm în listele de instanțe ale chunk-ului
-        for (const auto& m : activeChunks[cPos].grassMatrices) {
-            glm::vec3 p = glm::vec3(m[3]); // Coloana 4 din matrice este poziția
-            if ((int)std::floor(p.x) == x && (int)std::floor(p.y) == y && (int)std::floor(p.z) == z)
-                return true;
-        }
-        for (const auto& m : activeChunks[cPos].stoneMatrices) {
-            glm::vec3 p = glm::vec3(m[3]);
-            if ((int)std::floor(p.x) == x && (int)std::floor(p.y) == y && (int)std::floor(p.z) == z)
-                return true;
-        }
+        int lx = x - (chunkX * 16);
+        int lz = z - (chunkZ * 16);
+        if (y >= 0 && y < 128)
+            return activeChunks[cPos].blocks[lx][y][lz] != 0;
     }
     return false;
 }

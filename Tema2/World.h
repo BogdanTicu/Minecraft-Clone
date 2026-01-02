@@ -14,11 +14,28 @@ struct ChunkPos {
     }
 };
 
-struct ChunkData {
-    std::vector<glm::mat4> grassMatrices;
-    std::vector<glm::mat4> stoneMatrices;
+// În World.h
+struct WorldVertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
 };
 
+struct ChunkData {
+    unsigned char blocks[16][128][16];
+
+    // Două perechi de VAO/VBO pentru a păstra culorile separate
+    GLuint grassVAO = 0, grassVBO = 0;
+    int grassVertexCount = 0;
+
+    GLuint stoneVAO = 0, stoneVBO = 0;
+    int stoneVertexCount = 0;
+
+    void Cleanup() {
+        if (grassVAO != 0) { glDeleteVertexArrays(1, &grassVAO); glDeleteBuffers(1, &grassVBO); }
+        if (stoneVAO != 0) { glDeleteVertexArrays(1, &stoneVAO); glDeleteBuffers(1, &stoneVBO); }
+    }
+};
 class World {
 public:
     int MapSize;
@@ -41,5 +58,8 @@ public:
 private:
     // Functia matematica de zgomot (noise)
     float getNoiseHeight(int x, int z);
+    void AddFaceToMesh(std::vector<WorldVertex>& vertices, glm::vec3 p, glm::vec3 normal, int blockType, int faceDirection);
+    void BuildChunkMesh(ChunkPos pos);
+	void UpdateNeighborChunks(ChunkPos pos, int lx, int ly, int lz);
 	FastNoiseLite noiseGenerator;
 };
