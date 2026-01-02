@@ -1,9 +1,17 @@
 ﻿#include "World.h"
 #include <math.h>
 #include "glm/gtc/matrix_transform.hpp"
-
+#include "FastNoiseLite.h"
 World::World(int size) : MapSize(size) {
     heightMap.resize(size, std::vector<float>(size));
+	// Initializam generatorul de noise
+	noiseGenerator.SetNoiseType(FastNoiseLite::NoiseType::NoiseType_OpenSimplex2);
+    noiseGenerator.SetSeed(1234);
+    noiseGenerator.SetFractalType(FastNoiseLite::FractalType_FBm);
+    noiseGenerator.SetFractalOctaves(6);      // Mai multe octave = mai multe detalii fine
+    noiseGenerator.SetFractalLacunarity(2.0f);
+    noiseGenerator.SetFractalGain(0.5f);      // Determină cât de "ascuțite" sunt detaliile
+
 }
 
 // Dimensiunea standard a unui chunk în Minecraft
@@ -16,20 +24,19 @@ void World::GenerateChunk(ChunkPos pos) {
         return;
     }
     ChunkData newChunk;
-
     for (int x = 0; x < 16; x++) {
         for (int z = 0; z < 16; z++) {
             int globalX = pos.x * 16 + x;
             int globalZ = pos.z * 16 + z;
-            float y = getNoiseHeight(globalX, globalZ);
+            float surfaceY = getNoiseHeight(globalX, globalZ);
 
-            // Matricea pentru blocul de sus (Iarbă)
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, y, (float)globalZ));
+            // Blocul de la suprafață (Iarbă)
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, surfaceY, (float)globalZ));
             newChunk.grassMatrices.push_back(model);
-    
-            // Matricele pentru blocurile de dedesubt (Piatră/Gri)
-            for (int d = 1; d <= 2; d++) {
-                glm::mat4 stoneModel = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, y - d, (float)globalZ));
+
+            // În interiorul World::GenerateChunk
+            for (int y = (int)surfaceY - 1; y >= 0; y--) {
+                glm::mat4 stoneModel = glm::translate(glm::mat4(1.0f), glm::vec3((float)globalX, (float)y, (float)globalZ));
                 newChunk.stoneMatrices.push_back(stoneModel);
             }
         }
@@ -62,25 +69,39 @@ float noise(float x, float z) {
 }
 
 float World::getNoiseHeight(int x, int z) {
-    float freq = 0.02f; // Scara munților
-    float amp = 10.0f;  // Înălțimea maximă
+    // 1. Selectorul - frecvență foarte mică (0.005) pentru a crea zone mari de biomi
+    float selector = noiseGenerator.GetNoise((float)x * 0.5f, (float)z * 0.5f);
+    // Notă: FastNoiseLite returnează -1 la 1. Îl mapăm la 0 - 1 pentru ușurință.
+    selector = (selector + 1.0f) * 0.5f;
 
-    float h = 0;
-    float currentFreq = freq;
-    float currentAmp = amp;
+    // 2. Detaliul de teren (frecvență medie)
+    float detailNoise = noiseGenerator.GetNoise((float)x * 2.0f, (float)z * 2.0f);
+    detailNoise = (detailNoise + 1.0f) * 0.5f;
 
-    // Aplicăm 4 octave pentru detalii
-    for (int i = 0; i < 4; i++) {
-        // Folosim sin/cos dar cu frecvențe care nu se aliniază perfect pentru a simula noise-ul
-        h += (sin(x * currentFreq) + cos(z * currentFreq)) * currentAmp;
+    float finalHeight = 0.0f;
+    float baseLevel = 15.0f;
 
-        currentFreq *= 2.1f; // Creștem frecvența (detalii mai fine)
-        currentAmp *= 0.5f;  // Scădem amplitudinea (impact mai mic)
+    // 3. Logica de Blending (Interpolare)
+    if (selector < 0.4f) {
+        // Câmpie: variație minimă
+        finalHeight = baseLevel + detailNoise * 3.0f;
+    }
+    else if (selector > 0.6f) {
+        // Munți: variație mare
+        finalHeight = baseLevel + detailNoise * 40.0f;
+    }
+    else {
+        // Zona de tranziție (între 0.4 și 0.6): facem o trecere lină
+        // Calculăm cât de mult "munte" să punem
+        float t = (selector - 0.4f) / 0.2f; // Rezultă o valoare între 0 și 1
+        float plainsY = baseLevel + detailNoise * 3.0f;
+        float mountainY = baseLevel + detailNoise * 40.0f;
+
+        // Interpolare liniară (Lerp)
+        finalHeight = plainsY + t * (mountainY - plainsY);
     }
 
-    // Nivelul de bază al mării/terenului
-    float baseHeight = 5.0f;
-    return std::floor(h + baseHeight);
+    return std::floor(finalHeight);
 }
 
 void World::GenerateMap() {

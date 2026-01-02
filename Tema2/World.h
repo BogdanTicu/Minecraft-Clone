@@ -4,7 +4,7 @@
 #include "Cube.h"
 #include "glm/glm.hpp"
 #include <map>
-
+#include "FastNoiseLite.h"
 struct ChunkPos {
     int x, z;
     // Operator necesar pentru a folosi structura ca cheie in std::map
@@ -41,4 +41,5 @@ public:
 private:
     // Functia matematica de zgomot (noise)
     float getNoiseHeight(int x, int z);
+	FastNoiseLite noiseGenerator;
 };
